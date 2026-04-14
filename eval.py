@@ -277,8 +277,8 @@ if __name__ == "__main__":
     print("Model loaded successfully from:", args.model_path)
 
     # Evaluate the model on test data.
-    test_loss, test_accuracy = evaluate_model(model, test_loader, device, threshold=args.threshold)
-    print("Test Loss: {:.4f}, Test Accuracy: {:.2f}%".format(test_loss, test_accuracy * 100))
+    test_metrics = evaluate_model(model, test_loader, device, threshold=args.threshold)
+    print(f"Metrics: {test_metrics}")
 
     # Elapsed time.
     et = time.time()
