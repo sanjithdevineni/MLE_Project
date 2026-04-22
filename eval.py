@@ -124,7 +124,8 @@ def load_trained_model(model_path, num_labels, device, image_size):
         model: The model loaded on device. (If you are not using pytorch nn.Module directly, it is fine but make sure what it loads is compatible with the rest of the code.)
     """
 
-    model = CREATE_YOUR_MODEL_HERE(num_labels=num_labels) # Replace with your model creation function
+    # model = CREATE_YOUR_MODEL_HERE(num_labels=num_labels) # Replace with your model creation function
+    model = create_model(num_labels=num_labels)
 
     ## Change/rewrite the rest of the function as needed, but make sure what it outputs works with the other functions (e.g., predict)
 
@@ -182,6 +183,7 @@ def evaluate_model(model, test_loader, device, threshold=0.5):
     ## Do *not* remove or change metrics. You can add new metrics if you want.)
 
     all_probs = []; all_preds = []; all_labels = []
+    total_samples = 0 # Added total_samples initialization to prevent bug
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
