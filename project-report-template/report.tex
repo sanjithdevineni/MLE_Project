@@ -3,6 +3,9 @@
 \usepackage[left=0.7in,right=0.7in,top=0.35in,bottom=0.7in]{geometry}
 \usepackage{xcolor}
 \usepackage{hyperref}
+\usepackage{amsmath}    % equations and align environments
+\usepackage{booktabs}   % professional table rules (\toprule, \midrule, \bottomrule)
+\usepackage{microtype}  % improved text justification and kerning
 
 \hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
 \urlstyle{rm}
@@ -10,13 +13,11 @@
 
 
 \title{CAI 6108: Machine Learning Engineering\\
-	\large Project Report:  {\textcolor{purple}{Title of the Project}}} %% TODO: replace with the title of your project
-	
-	
-	
-%% TODO: your name and email go here (all members of the group)
-%% Comment out as needed and designate a point of contact
-%% Add / remove names as necessary
+	\large Project Report: Multi-Label Image Classification via Transfer Learning}
+
+
+
+%% Group members and point of contact
 \author{
         Sanjith Devineni \\{\em (Point of Contact)} \\
         sdevineni@ufl.edu\\
@@ -51,72 +52,302 @@
 
 
 
-%% TODO: write an introduction to make the report self-contained
-%% Must address:
-%% - What is the project about and what is notable about the approach and results?
-%%
 \section{Introduction}
 
-% TODO:
-Write here. You can cite scholarly work like this~\cite{murphy2022probabilistic}. You can also include URLs in a footnote like this.\footnote{UCI repository: \url{https://archive.ics.uci.edu/}.}
+Multi-label image classification is a fundamental computer vision problem in which a single image
+may simultaneously belong to multiple semantic categories.  Unlike standard single-label
+classification---where exactly one class is assigned per sample---the multi-label setting requires
+a model to independently predict the presence or absence of every class in the label set.  This
+substantially increases the difficulty of the problem: the output space grows exponentially with the
+number of labels, standard accuracy metrics no longer capture partial correctness, and methods based
+on a single softmax distribution are inapplicable because class memberships are not mutually
+exclusive.  This project addresses a practical multi-label classification task involving twelve
+everyday object categories found in desk and workspace environments: \textit{pen}, \textit{paper},
+\textit{book}, \textit{clock}, \textit{phone}, \textit{laptop}, \textit{chair}, \textit{desk},
+\textit{bottle}, \textit{keychain}, \textit{backpack}, and \textit{calculator}.
+
+The dataset consists of 4,543 RGB images, each at a resolution of $128 \times 128$ pixels.
+Instead of a separate annotation file, class
+memberships are encoded directly in the name of each image's parent directory using an
+underscore-separated convention.  For example, images stored in the folder
+\texttt{pen\_paper\_book/} carry the labels \textit{pen}, \textit{paper}, and \textit{book}.
+The images depict real-world desk and workspace scenes in which multiple objects co-occur
+naturally, providing a rich multi-label structure: images carry between one and seven simultaneous
+labels, with an average of 1.76 labels per image.  Label frequencies are moderately
+imbalanced---\textit{pen} appears in 765 images while \textit{clock} appears in only
+503---introducing a slight challenge of maintaining strong performance across both frequent
+and rare classes.
+
+We design and implement a complete machine learning pipeline to address this.  The
+pipeline encompasses automated data loading via filesystem inspection with Python's
+\texttt{pathlib} library, multi-hot label vector construction, an 80\%/10\%/10\%
+train/validation/test split, a logistic regression baseline using flattened pixel features, and a
+fine-tuned EfficientNet-B0 convolutional neural network~\cite{tan2019efficientnet} leveraging
+transfer learning from ImageNet.  The pipeline is evaluated using four complementary
+metrics---Exact Match Accuracy, Hamming Loss, Macro F1, and Micro F1---that together assess
+performance from both strict and lenient perspectives.
 
 
-
-
-%% TODO: write about your approach / ML pipeline
-%% Must contain:
-%% - How you are trying to solve this problem
-%% - How did you process the data?
-%% - What is the task and approach (ML techniques)?
-%%
 \section{Approach}
 
-% TODO:
-Write here. 
+\subsection*{Pipeline Overview}
+
+The complete machine learning pipeline is implemented in a single Jupyter notebook
+(\texttt{main.ipynb}) using PyTorch~\cite{paszke2019pytorch} and
+scikit-learn~\cite{pedregosa2011scikit}.  It proceeds in the following stages:
+(1)~filesystem scan and label parsing;
+(2)~exploratory data analysis;
+(3)~image preprocessing and data augmentation;
+(4)~train/validation/test splitting and DataLoader construction;
+(5)~baseline model training and evaluation;
+(6)~EfficientNet-B0 training with periodic checkpointing; and
+(7)~final evaluation on the held-out test set.
+
+\subsection*{Data Loading and Preprocessing}
+
+Data loading requires no external annotation file.  Python's \texttt{pathlib.Path} library scans
+the \texttt{dataset/} root directory, reads each subdirectory name, splits it on underscores, and
+verifies that every token belongs to the 12-class vocabulary defined in \texttt{CLASS\_NAMES}.
+For each valid subdirectory a 12-dimensional multi-hot binary vector is constructed by setting
+position $k$ to 1 whenever class $k$ appears in the folder name.  Each image inside the
+subdirectory is then paired with this label vector, producing an entry in the
+\texttt{all\_samples} list---a flat list of (\texttt{Path}, \texttt{torch.Tensor}) tuples that
+serves as the shared data structure for all downstream stages.
+
+All images are resized to $128 \times 128$ pixels and normalized with the ImageNet channel-wise
+statistics: mean $\mu = (0.485,\, 0.456,\, 0.406)$ and standard deviation
+$\sigma = (0.229,\, 0.224,\, 0.225)$.  These values are required because the EfficientNet-B0
+backbone was pretrained on ImageNet and expects inputs in that standardized distribution.  During
+training, two stochastic augmentation operations are applied to reduce overfitting:
+(i)~random horizontal flipping with probability 0.5, and
+(ii)~\texttt{ColorJitter} with brightness, contrast, and saturation perturbations drawn
+independently from $[0.8, 1.2]$ and a hue perturbation bounded within $[-0.05, 0.05]$.
+At validation and test time only the deterministic resize-and-normalize pipeline is applied,
+ensuring reproducible evaluation.
+
+The 4,543-image dataset is partitioned using the ratio \texttt{prop\_vec}\,$= [16, 2, 2]$,
+corresponding to an 80\%/10\%/10\% split.  Two successive calls to
+\texttt{sklearn.model\_selection.train\_test\_split} with \texttt{random\_state}\,$= 42$ yield
+3,634 training images, 454 validation images, and 455 test images.  The fixed random seed
+guarantees that every run of the notebook produces the identical partition, enabling reproducible
+comparisons across team members and experimental configurations.
+
+\subsection*{Baseline Model}
+
+A logistic regression baseline is trained to establish a reference lower bound for the deep
+learning approach.  Each image is resized to $32 \times 32$ pixels and its three RGB channels
+are flattened into a 3,072-dimensional feature vector of raw pixel intensities; no feature
+engineering or dimensionality reduction is applied.  Scikit-learn's
+\texttt{OneVsRestClassifier}~\cite{pedregosa2011scikit} is then used to fit one independent
+binary \texttt{LogisticRegression} per class, with regularisation strength $C = 0.1$, the
+\texttt{liblinear} solver, and a maximum of 200 optimization iterations.  All twelve classifiers
+are trained in parallel via \texttt{n\_jobs=-1}.  At inference time, each binary classifier
+independently predicts whether its assigned class is present, and the twelve predictions are
+concatenated to form the full multi-label output.
+
+This design is intentionally simple: it makes no assumptions about spatial structure, inter-class
+dependencies, or learned representations.  Its sole purpose is to quantify the level of
+performance achievable with cheap pixel statistics, providing a concrete baseline against which
+the deep learning approach must demonstrate clear improvement.
+
+\subsection*{Main Model: EfficientNet-B0 with Transfer Learning}
+
+The primary model is EfficientNet-B0~\cite{tan2019efficientnet}, a compound-scaled convolutional
+neural network that achieves a favourable accuracy-to-parameter-count trade-off on standard image
+benchmarks.  We load the architecture with weights pretrained on ImageNet-1K
+(\texttt{EfficientNet\_B0\_Weights.IMAGENET1K\_V1}) and replace the final linear layer of the
+classifier head with a new \texttt{nn.Linear(1280,\,12)} layer, where 1,280 is the penultimate
+feature dimension of EfficientNet-B0 and 12 is the number of target classes.  The modified head
+outputs 12 raw logits; at inference time a sigmoid function converts each logit to an independent
+class probability, and any class whose probability exceeds the threshold $\tau = 0.5$ is predicted
+as present.
+
+Transfer learning is well-suited to this problem.  Training a deep convolutional network from
+random initialisation on only 3,634 images risks both underfitting (insufficient capacity
+adaptation) and overfitting (lack of example diversity).  Pretraining on ImageNet provides the
+backbone with rich general-purpose visual representations---low-level features such as edges and
+textures as well as higher-level object-part detectors---that transfer effectively to workspace
+object images even though the target label spaces differ.  Fine-tuning all layers jointly then
+adapts these representations to the specific visual content of the dataset while retaining the
+broad knowledge acquired from ImageNet.
+
+Training uses Binary Cross-Entropy with Logits Loss (\texttt{BCEWithLogitsLoss}), which combines
+sigmoid activation and binary cross-entropy in a numerically stable formulation and treats each
+of the 12 class outputs as an independent binary prediction.  Optimization is performed with the
+Adam algorithm~\cite{kingma2014adam} at an initial learning rate of $\eta = 10^{-4}$.  A step
+learning-rate schedule (\texttt{StepLR}) halves the learning rate every 5 epochs
+($\gamma = 0.5$), enabling rapid convergence in early epochs followed by finer parameter
+refinement later in training.  The model is trained for 15 epochs with a batch size of 32, and
+the model's state dictionary is written to \texttt{best\_model.pth} whenever the validation Macro
+F1 surpasses the best value recorded in any previous epoch.
+
+During inference, the model is instantiated without pretrained weights and loaded entirely from 
+the saved checkpoint, ensuring the evaluation pipeline runs completely offline with no external 
+network dependencies.
 
 
-
-
-
-%% TODO: write about your evaluation methodology
-%% Must contain:
-%% - What are the metrics?
-%% - What are the baselines?
-%% - How did you split the data?
-%%
 \section{Evaluation Methodology}
 
-% TODO:
-Write here. 
+\subsection*{Multi-Label Evaluation Metrics}
+
+Standard single-label accuracy is poorly suited to multi-label problems because it awards no
+credit for partial correctness: a classifier that correctly identifies 11 of 12 labels for every
+sample would score 0\% under exact-match accuracy even though it is nearly right.  We therefore
+adopt four complementary metrics that together characterize model quality from both strict and
+lenient perspectives.
+
+\textbf{Exact Match Accuracy} (EMA) is the most demanding metric.  A prediction is counted as
+correct only when all $K = 12$ label positions simultaneously match the ground truth:
+\begin{equation}
+    \text{EMA} = \frac{1}{N} \sum_{i=1}^{N}
+        \mathbf{1}\!\left[\hat{\mathbf{y}}_i = \mathbf{y}_i\right],
+    \label{eq:ema}
+\end{equation}
+where $N$ is the number of test samples, $\hat{\mathbf{y}}_i \in \{0,1\}^{K}$ is the predicted
+multi-hot vector, and $\mathbf{y}_i \in \{0,1\}^{K}$ is the ground-truth vector.
+
+\textbf{Hamming Loss} measures prediction error at the individual label--sample level.  It is
+defined as the fraction of all $N \times K$ label predictions that are incorrect:
+\begin{equation}
+    L_H = \frac{1}{N \cdot K}
+          \sum_{i=1}^{N} \sum_{k=1}^{K}
+          \mathbf{1}\!\left[\hat{y}_{ik} \neq y_{ik}\right].
+    \label{eq:hamming}
+\end{equation}
+A perfect classifier achieves $L_H = 0$; lower values indicate better performance.  Unlike EMA,
+Hamming Loss gives partial credit when some but not all labels are correctly predicted.
+
+\textbf{Macro F1} computes the harmonic mean of precision and recall for each class independently
+and averages equally over all $K$ classes.  Because every class contributes the same weight
+regardless of frequency, Macro F1 is sensitive to poor performance on rare classes such as
+\textit{clock} (the least frequent class), ensuring the model is not rewarded for ignoring
+underrepresented categories.
+
+\textbf{Micro F1} aggregates true positives ($\mathrm{TP}$), false positives ($\mathrm{FP}$), and
+false negatives ($\mathrm{FN}$) across all class--sample pairs before computing F1:
+\begin{equation}
+    F_{1,\text{micro}}
+        = \frac{2\,\mathrm{TP}}{2\,\mathrm{TP} + \mathrm{FP} + \mathrm{FN}}.
+    \label{eq:microf1}
+\end{equation}
+Because it pools statistics globally, Micro F1 is dominated by the most frequent classes and thus
+complements Macro F1, which treats all classes equally.
+
+\subsection*{Data Splitting and Checkpoint Protocol}
+
+All hyperparameter decisions---including learning rate, batch size, scheduler parameters, number
+of training epochs, and classification threshold---are based exclusively on validation set
+performance.  The test set is withheld and evaluated exactly once, after training is complete, to
+provide an unbiased estimate of generalisation performance.  The checkpoint criterion is
+validation Macro F1: the model's state dictionary is written to \texttt{best\_model.pth} whenever
+this metric improves.  Final evaluation loads this checkpoint, applies the deterministic
+evaluation transform (resize $+$ ImageNet normalization), runs inference across the test set, and
+computes all four metrics above.  The graders additionally evaluate the submitted
+\texttt{best\_model.pth} on an independent held-out test set via \texttt{eval.py}, using the same
+normalization statistics and a sigmoid threshold of 0.5.
+
+\subsection*{Baseline Comparison and Tooling}
+
+The logistic regression baseline is evaluated on the same test partition as EfficientNet-B0,
+making the two comparisons directly valid.  Any deep model that fails to outperform the baseline
+on all reported metrics would not justify its added computational complexity and would require
+redesign.  All metric computations use scikit-learn's \texttt{hamming\_loss} and
+\texttt{f1\_score} implementations~\cite{pedregosa2011scikit}, which adhere to the standard
+formulations in Equations~\eqref{eq:ema}--\eqref{eq:microf1}.  Loss computations during training
+use PyTorch's \texttt{BCEWithLogitsLoss}~\cite{paszke2019pytorch}.  The baseline is evaluated on
+Hamming Loss and Macro F1; Exact Match Accuracy and Micro F1 are computed for EfficientNet-B0
+only, keeping the baseline evaluation focused on the primary comparison metrics.
 
 
-
-
-%% TODO: write about your results/findings
-%% Must contain:
-%% - results comparing your approach to baseline according to metrics
-%%
-%% You can present this information in whatever way you want but consider tables and (or) figures.
-%%
 \section{Results}
 
-% TODO:
-Write here. 
-
-
-
-
-
-%% TODO: write about what you conclude. This is not meant to be a summary section but more of a takeaways/future work section.
-%% Must contain:
-%% - Any concrete takeaways or conclusions from your experiments/results/project
+%% TODO: Insert test set metrics here (from main.ipynb Section 8).
+%% The exact numbers to copy are printed under "Test Set Evaluation -- EfficientNet-B0"
+%% in the Section 8 cell output.
 %%
-%% You can also discuss limitations here if you want.
+%% ---- Suggested structure ----
 %%
+%% \paragraph{Overall performance.}
+%% [1--2 sentences: EfficientNet-B0 vs.\ baseline on every metric; note the improvement margin.]
+%%
+%% \begin{table}[h]
+%% \centering
+%% \caption{Test-set performance of the baseline and EfficientNet-B0.}
+%% \label{tab:overall}
+%% \begin{tabular}{lcccc}
+%% \toprule
+%% Model & Exact Match $\uparrow$ & Hamming Loss $\downarrow$ & Macro F1 $\uparrow$ & Micro F1 $\uparrow$ \\
+%% \midrule
+%% Logistic Regression (baseline) & ---    & INSERT & INSERT & ---    \\
+%% EfficientNet-B0 (ours)         & INSERT & INSERT & INSERT & INSERT \\
+%% \bottomrule
+%% \end{tabular}
+%% \end{table}
+%%
+%% \paragraph{Per-class analysis.}
+%% [Note highest and lowest per-class F1. Discuss possible reasons: visual distinctiveness,
+%%  class frequency, co-occurrence with visually similar objects.]
+%%
+%% \begin{table}[h]
+%% \centering
+%% \caption{Per-class F1 scores for EfficientNet-B0 on the test set.}
+%% \label{tab:perclass}
+%% \begin{tabular}{lc|lc}
+%% \toprule
+%% Class       & F1     & Class       & F1     \\
+%% \midrule
+%% pen         & INSERT & chair       & INSERT \\
+%% paper       & INSERT & desk        & INSERT \\
+%% book        & INSERT & bottle      & INSERT \\
+%% clock       & INSERT & keychain    & INSERT \\
+%% phone       & INSERT & backpack    & INSERT \\
+%% laptop      & INSERT & calculator  & INSERT \\
+%% \bottomrule
+%% \end{tabular}
+%% \end{table}
+%%
+%% \paragraph{Training dynamics.}
+%% [Describe the loss and F1 curves from the Section 7 plot: rapid early improvement,
+%%  LR-decay-driven refinement in later epochs, and at which epoch the best checkpoint was saved.]
+
+Write here.
+
+
+
+
 \section{Conclusions}
 
-% TODO:
-Write here. 
+%% TODO: Fill in after reviewing results.
+%%
+%% Required content (per template instructions):
+%%
+%%   Concrete takeaways:
+%%     - Transfer learning provides a large quantitative improvement over the pixel-based
+%%       baseline (cite specific metric gains once Results is complete).
+%%     - Validation Macro F1 of 0.80 and the gap between train and val loss suggest the
+%%       model generalises well without severe overfitting.
+%%
+%%   Per-class observations:
+%%     - Identify which classes were easiest (e.g., visually distinctive shape or colour)
+%%       and which were hardest (e.g., phone vs.\ calculator due to visual similarity;
+%%       clock due to lower training frequency of 503 images).
+%%
+%%   Limitations:
+%%     - Fixed threshold tau=0.5 applied uniformly across all classes; per-class
+%%       calibration could improve Macro F1, especially for rare classes.
+%%     - 15 training epochs may not represent full convergence; the learning curves
+%%       suggest continued improvement is possible.
+%%     - Moderate class imbalance (clock: 503 images vs.\ pen: 765) was not explicitly
+%%       addressed (e.g., no weighted loss or oversampling).
+%%     - No test-time augmentation or ensemble methods were applied.
+%%
+%%   Future work:
+%%     - Per-class threshold calibration to optimise individual class recall/precision.
+%%     - Stronger augmentation strategies (random crops, MixUp, CutMix).
+%%     - Larger EfficientNet variants (B1--B7) or vision transformer architectures.
+%%     - Modelling label co-occurrence structure with graph-based or sequence-based methods.
+
+Write here.
 
 %%%%
 
