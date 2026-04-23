@@ -125,6 +125,13 @@ def load_trained_model(model_path, num_labels, device, image_size):
     """
 
     # model = CREATE_YOUR_MODEL_HERE(num_labels=num_labels) # Replace with your model creation function
+
+    def create_model(num_labels=12, pretrained=False):
+        from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+        weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+        model   = efficientnet_b0(weights=weights)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_labels)
+        return model
     model = create_model(num_labels=num_labels)
 
     ## Change/rewrite the rest of the function as needed, but make sure what it outputs works with the other functions (e.g., predict)
