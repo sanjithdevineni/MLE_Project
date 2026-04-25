@@ -6,6 +6,7 @@
 \usepackage{amsmath}    % equations and align environments
 \usepackage{booktabs}   % professional table rules (\toprule, \midrule, \bottomrule)
 \usepackage{microtype}  % improved text justification and kerning
+\usepackage{graphicx}   % for \includegraphics figure placeholders
 
 \hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
 \urlstyle{rm}
@@ -85,7 +86,8 @@ train/validation/test split, a logistic regression baseline using flattened pixe
 fine-tuned EfficientNet-B0 convolutional neural network~\cite{tan2019efficientnet} leveraging
 transfer learning from ImageNet.  The pipeline is evaluated using four complementary
 metrics---Exact Match Accuracy, Hamming Loss, Macro F1, and Micro F1---that together assess
-performance from both strict and lenient perspectives.
+performance from both strict and lenient perspectives.  The fine-tuned EfficientNet-B0 achieves a
+test-set Macro F1 of 0.8127, compared to 0.1614 for the logistic regression baseline.
 
 
 \section{Approach}
@@ -124,6 +126,20 @@ training, two stochastic augmentation operations are applied to reduce overfitti
 independently from $[0.8, 1.2]$ and a hue perturbation bounded within $[-0.05, 0.05]$.
 At validation and test time only the deterministic resize-and-normalize pipeline is applied,
 ensuring reproducible evaluation.
+
+The complete training transform pipeline, applied in sequence, is as follows:
+
+\begin{verbatim}
+Resize(128x128)
+RandomHorizontalFlip(p=0.5)
+ColorJitter(brightness=(0.8,1.2), contrast=(0.8,1.2),
+            saturation=(0.8,1.2), hue=(-0.05, 0.05))
+ToTensor()
+Normalize(mean=[0.485, 0.456, 0.406],
+          std=[0.229, 0.224, 0.225])
+\end{verbatim}
+The evaluation transform omits all stochastic steps, applying only \texttt{Resize},
+\texttt{ToTensor}, and \texttt{Normalize}.
 
 The 4,543-image dataset is partitioned using the ratio \texttt{prop\_vec}\,$= [16, 2, 2]$,
 corresponding to an 80\%/10\%/10\% split.  Two successive calls to
@@ -177,12 +193,14 @@ of the 12 class outputs as an independent binary prediction.  Optimization is pe
 Adam algorithm~\cite{kingma2014adam} at an initial learning rate of $\eta = 10^{-4}$.  A step
 learning-rate schedule (\texttt{StepLR}) halves the learning rate every 5 epochs
 ($\gamma = 0.5$), enabling rapid convergence in early epochs followed by finer parameter
-refinement later in training.  The model is trained for 15 epochs with a batch size of 32, and
+refinement later in training.  The model is trained for 20 epochs with a batch size of 32, and
 the model's state dictionary is written to \texttt{best\_model.pth} whenever the validation Macro
-F1 surpasses the best value recorded in any previous epoch.
+F1 surpasses the best value recorded in any previous epoch.  Training was conducted on the
+University of Florida's HiPerGator high-performance computing cluster, leveraging an NVIDIA CUDA
+GPU via SLURM job scheduling, which allowed all 20 epochs to complete in under 10 minutes.
 
-During inference, the model is instantiated without pretrained weights and loaded entirely from 
-the saved checkpoint, ensuring the evaluation pipeline runs completely offline with no external 
+During inference, the model is instantiated without pretrained weights and loaded entirely from
+the saved checkpoint, ensuring the evaluation pipeline runs completely offline with no external
 network dependencies.
 
 
@@ -244,7 +262,10 @@ this metric improves.  Final evaluation loads this checkpoint, applies the deter
 evaluation transform (resize $+$ ImageNet normalization), runs inference across the test set, and
 computes all four metrics above.  The graders additionally evaluate the submitted
 \texttt{best\_model.pth} on an independent held-out test set via \texttt{eval.py}, using the same
-normalization statistics and a sigmoid threshold of 0.5.
+normalization statistics and a sigmoid threshold of 0.5.  Per course requirements, the evaluation
+script must run completely offline; this is satisfied by instantiating the model with
+\texttt{pretrained=False} and loading it exclusively from the saved state dictionary, eliminating
+any network calls during inference.
 
 \subsection*{Baseline Comparison and Tooling}
 
@@ -261,93 +282,170 @@ only, keeping the baseline evaluation focused on the primary comparison metrics.
 
 \section{Results}
 
-%% TODO: Insert test set metrics here (from main.ipynb Section 8).
-%% The exact numbers to copy are printed under "Test Set Evaluation -- EfficientNet-B0"
-%% in the Section 8 cell output.
-%%
-%% ---- Suggested structure ----
-%%
-%% \paragraph{Overall performance.}
-%% [1--2 sentences: EfficientNet-B0 vs.\ baseline on every metric; note the improvement margin.]
-%%
-%% \begin{table}[h]
-%% \centering
-%% \caption{Test-set performance of the baseline and EfficientNet-B0.}
-%% \label{tab:overall}
-%% \begin{tabular}{lcccc}
-%% \toprule
-%% Model & Exact Match $\uparrow$ & Hamming Loss $\downarrow$ & Macro F1 $\uparrow$ & Micro F1 $\uparrow$ \\
-%% \midrule
-%% Logistic Regression (baseline) & ---    & INSERT & INSERT & ---    \\
-%% EfficientNet-B0 (ours)         & INSERT & INSERT & INSERT & INSERT \\
-%% \bottomrule
-%% \end{tabular}
-%% \end{table}
-%%
-%% \paragraph{Per-class analysis.}
-%% [Note highest and lowest per-class F1. Discuss possible reasons: visual distinctiveness,
-%%  class frequency, co-occurrence with visually similar objects.]
-%%
-%% \begin{table}[h]
-%% \centering
-%% \caption{Per-class F1 scores for EfficientNet-B0 on the test set.}
-%% \label{tab:perclass}
-%% \begin{tabular}{lc|lc}
-%% \toprule
-%% Class       & F1     & Class       & F1     \\
-%% \midrule
-%% pen         & INSERT & chair       & INSERT \\
-%% paper       & INSERT & desk        & INSERT \\
-%% book        & INSERT & bottle      & INSERT \\
-%% clock       & INSERT & keychain    & INSERT \\
-%% phone       & INSERT & backpack    & INSERT \\
-%% laptop      & INSERT & calculator  & INSERT \\
-%% \bottomrule
-%% \end{tabular}
-%% \end{table}
-%%
-%% \paragraph{Training dynamics.}
-%% [Describe the loss and F1 curves from the Section 7 plot: rapid early improvement,
-%%  LR-decay-driven refinement in later epochs, and at which epoch the best checkpoint was saved.]
+\paragraph{Overall performance.}
+EfficientNet-B0 substantially outperforms the logistic regression baseline across all jointly
+evaluated metrics, as shown in Table~\ref{tab:overall}.  The baseline achieves a Hamming Loss of
+0.1474 and Macro F1 of only 0.1614 on the validation set---confirming that raw pixel features
+carry insufficient discriminative information for reliable multi-label prediction.  Without a
+spatial hierarchy, learned convolutional filters, or any shared representation across classes,
+the one-versus-rest logistic regression approach learns only crude global intensity patterns, and
+its twelve independent classifiers cannot exploit the visual co-occurrence structure present in
+workspace scenes.  By contrast, EfficientNet-B0 achieves a Macro F1 of 0.8127 on the held-out
+test set---a nearly five-fold improvement---along with a Hamming Loss of 0.0516 (2.9$\times$
+lower than the baseline), Micro F1 of 0.8100, and Exact Match Accuracy of 0.5868.  These results
+confirm that transfer learning from ImageNet provides the backbone with feature representations
+that generalise effectively to workspace object images and that the deep pipeline is
+well-calibrated for this multi-label task.
 
-Write here.
+\begin{table}[htbp]
+\centering
+\caption{Performance comparison of baseline and EfficientNet-B0.  The baseline is evaluated on
+         the validation set; EfficientNet-B0 is evaluated on the held-out test set.
+         ($\downarrow$ lower is better; $\uparrow$ higher is better.)}
+\label{tab:overall}
+\begin{tabular}{lcccc}
+\toprule
+Model & Exact Match $\uparrow$ & Hamming Loss $\downarrow$ & Macro F1 $\uparrow$ & Micro F1 $\uparrow$ \\
+\midrule
+Logistic Regression (baseline) & ---    & 0.1474 & 0.1614 & ---    \\
+EfficientNet-B0 (ours)         & 0.5868 & 0.0516 & 0.8127 & 0.8100 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Per-class analysis.}
+Table~\ref{tab:perclass} reports per-class F1 scores for EfficientNet-B0 on the test set, and
+Figure~\ref{fig:perclass} visualises the distribution.  Performance varies in a pattern
+that reflects both visual distinctiveness and class frequency.  The strongest classes are
+\textit{backpack} (F1 = 0.9322) and \textit{chair} (F1 = 0.8870), both of which present
+distinctive silhouettes and large spatial footprints reliably discriminated across varied
+backgrounds.  \textit{calculator} (F1 = 0.8793) and \textit{clock} (F1 = 0.8421) also perform
+well; notably, \textit{clock} achieves this high score despite being the rarest class in the
+dataset (503 training images), suggesting that the pretrained features support strong
+generalisation even with limited training examples.  The weakest classes are \textit{phone}
+(F1 = 0.7286) and \textit{bottle} (F1 = 0.7414).  These lower scores are consistent with
+visual ambiguity: \textit{phone} shares a flat rectangular appearance with \textit{calculator}
+and the two frequently co-occur in workspace scenes, increasing false positives; \textit{bottle}
+varies widely in shape, colour, and opacity and is often partially occluded by other desk
+objects, increasing false negatives.
+
+\begin{table}[htbp]
+\centering
+\caption{Per-class F1 scores for EfficientNet-B0 on the held-out test set.}
+\label{tab:perclass}
+\begin{tabular}{lclc}
+\toprule
+Class       & F1     & Class       & F1     \\
+\midrule
+pen         & 0.8333 & chair       & 0.8870 \\
+paper       & 0.8085 & desk        & 0.7742 \\
+book        & 0.7550 & bottle      & 0.7414 \\
+clock       & 0.8421 & keychain    & 0.7656 \\
+phone       & 0.7286 & backpack    & 0.9322 \\
+laptop      & 0.8058 & calculator  & 0.8793 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.5\linewidth]{../images/Test set eval.png}
+    \caption{Test set evaluation output showing per-class F1 scores for all 12 classes.}
+    \label{fig:perclass}
+\end{figure}
+
+\paragraph{Training dynamics.}
+Figure~\ref{fig:training_history} shows the evolution of training loss and validation Macro F1
+over all 20 epochs.  The model converges rapidly in the first five epochs: validation Macro F1
+rises from 0.3443 at epoch~1 to 0.7576 at epoch~5, reflecting fast adaptation of pretrained
+ImageNet features to workspace-object representations.  Following the first learning-rate decay
+at epoch~5 (from $10^{-4}$ to $5 \times 10^{-5}$), improvement continues more gradually as the
+optimizer makes finer weight adjustments.  A second decay at epoch~10 (to $2.5 \times 10^{-5}$)
+yields further refinement, with the best checkpoint saved at epoch~17 (validation Macro F1 =
+0.8067).  After epoch~17 the metric fluctuates within $\pm 0.004$, indicating that the model has
+reached convergence.  The training loss continues to decrease throughout all 20 epochs while the
+validation loss stabilises around 0.14, indicating mild overfitting that does not measurably harm
+test performance.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\linewidth]{../images/Training history graphs.png}
+    \caption{Training loss and validation metrics over 20 epochs on HiPerGator.}
+    \label{fig:training_history}
+\end{figure}
+
+\paragraph{Dataset characteristics.}
+Figure~\ref{fig:sample_images} shows a representative selection of images from the dataset.  The
+images capture real-world workspace and desk environments with varying lighting conditions, camera
+angles, and background clutter, confirming that the model must learn robust object representations
+rather than exploit systematic imaging artifacts.  With an average of 1.76 labels per image and a
+maximum of 7 simultaneous labels, the dataset exhibits the multi-label structure that motivated the
+use of per-class sigmoid thresholding rather than a single-class softmax output.
+Figure~\ref{fig:classcounts} shows the distribution of images across classes.  Per-class
+counts range from 503 (\textit{clock}) to 765 (\textit{pen}), with the remaining ten classes
+distributed between 588 and 736 images.  Despite this moderate imbalance, \textit{clock} achieves
+one of the highest F1 scores (0.8421), indicating that the level of class imbalance here is not
+severe enough to necessitate explicit resampling or a weighted loss function.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\linewidth]{../images/Sample images with labels.png}
+    \caption{Sample images from the dataset with their ground-truth labels.}
+    \label{fig:sample_images}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.5\linewidth]{../images/Per_class img counts.png}
+    \caption{Per-class image counts in the dataset (sorted by frequency). Clock is least represented (503); pen is most represented (765).}
+    \label{fig:classcounts}
+\end{figure}
 
 
 
 
+\clearpage
 \section{Conclusions}
 
-%% TODO: Fill in after reviewing results.
-%%
-%% Required content (per template instructions):
-%%
-%%   Concrete takeaways:
-%%     - Transfer learning provides a large quantitative improvement over the pixel-based
-%%       baseline (cite specific metric gains once Results is complete).
-%%     - Validation Macro F1 of 0.80 and the gap between train and val loss suggest the
-%%       model generalises well without severe overfitting.
-%%
-%%   Per-class observations:
-%%     - Identify which classes were easiest (e.g., visually distinctive shape or colour)
-%%       and which were hardest (e.g., phone vs.\ calculator due to visual similarity;
-%%       clock due to lower training frequency of 503 images).
-%%
-%%   Limitations:
-%%     - Fixed threshold tau=0.5 applied uniformly across all classes; per-class
-%%       calibration could improve Macro F1, especially for rare classes.
-%%     - 15 training epochs may not represent full convergence; the learning curves
-%%       suggest continued improvement is possible.
-%%     - Moderate class imbalance (clock: 503 images vs.\ pen: 765) was not explicitly
-%%       addressed (e.g., no weighted loss or oversampling).
-%%     - No test-time augmentation or ensemble methods were applied.
-%%
-%%   Future work:
-%%     - Per-class threshold calibration to optimise individual class recall/precision.
-%%     - Stronger augmentation strategies (random crops, MixUp, CutMix).
-%%     - Larger EfficientNet variants (B1--B7) or vision transformer architectures.
-%%     - Modelling label co-occurrence structure with graph-based or sequence-based methods.
+This project presents a complete end-to-end pipeline for multi-label image classification of
+twelve workspace object categories.  EfficientNet-B0 fine-tuned on 3,634 training images
+achieves a test-set Macro F1 of 0.8127, Micro F1 of 0.8100, Hamming Loss of 0.0516, and Exact
+Match Accuracy of 0.5868---a dramatic improvement over the logistic regression baseline, which
+attains a Macro F1 of only 0.1614 and Hamming Loss of 0.1474.  The pipeline satisfies all
+offline inference requirements: the evaluation script loads the model entirely from the saved
+\texttt{best\_model.pth} state dictionary with \texttt{pretrained=False}, requiring no network
+access, and the grader-provided \texttt{eval.py} script can be run immediately after submission
+without any additional setup.
 
-Write here.
+The central design choice driving these results is transfer learning from
+ImageNet~\cite{tan2019efficientnet}.  Pretraining endows the EfficientNet-B0 backbone with rich
+visual feature representations---edges, textures, and object-part detectors---that transfer
+effectively to workspace objects, enabling fast convergence: validation Macro F1 reaches 0.76
+within just five epochs on a training set of under 3,700 images.  Data augmentation (random
+horizontal flips and \texttt{ColorJitter}) provided meaningful regularisation, preventing the
+mild overfitting observable in the training curves from significantly degrading test performance.
+The use of \texttt{BCEWithLogitsLoss} with per-class sigmoid thresholding embeds the correct
+inductive bias for this problem: since class memberships are independent, treating each output
+as a separate binary prediction is more principled than competing approaches such as multi-class
+softmax.  The two-stage \texttt{StepLR} schedule also contributed meaningfully to convergence;
+both learning-rate decays produced measurable validation F1 improvements, confirming the value
+of staged step-size reduction after an initial fast-learning phase.
+
+Of the reported metrics, Exact Match Accuracy (0.5868) is the weakest, which is expected: it
+requires every one of the 12 label positions to be simultaneously correct, and images with many
+active labels (up to seven in this dataset) offer more opportunities for a single misprediction.
+Several directions could improve results further.  First, per-class threshold calibration---selecting
+a separate decision threshold $\tau_k$ for each class $k$ based on validation-set
+precision--recall curves---could improve Macro F1, particularly for the weaker classes
+\textit{phone} (F1 = 0.7286) and \textit{bottle} (F1 = 0.7414), whose optimal thresholds likely
+differ from the global $\tau = 0.5$.  Second, stronger augmentation strategies such as random
+cropping, MixUp, or CutMix could further reduce overfitting on the relatively small training set.
+Third, a larger backbone such as EfficientNet-B3 or a vision transformer architecture would
+increase model capacity at the cost of longer training time, potentially recovering the remaining
+gap between validation and test F1.  Finally, the moderate class imbalance (503 images for
+\textit{clock} vs.\ 765 for \textit{pen}) was not explicitly addressed; a class-frequency-weighted
+loss or targeted oversampling of underrepresented label combinations could further improve
+performance on the rarest classes.
 
 %%%%
 
