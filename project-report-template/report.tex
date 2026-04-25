@@ -269,13 +269,13 @@ any network calls during inference.
 
 \subsection*{Baseline Comparison and Tooling}
 
-The logistic regression baseline is evaluated on the same test partition as EfficientNet-B0,
-making the two comparisons directly valid.  Any deep model that fails to outperform the baseline
-on all reported metrics would not justify its added computational complexity and would require
-redesign.  All metric computations use scikit-learn's \texttt{hamming\_loss} and
-\texttt{f1\_score} implementations~\cite{pedregosa2011scikit}, which adhere to the standard
-formulations in Equations~\eqref{eq:ema}--\eqref{eq:microf1}.  Loss computations during training
-use PyTorch's \texttt{BCEWithLogitsLoss}~\cite{paszke2019pytorch}.  The baseline is evaluated on
+The logistic regression baseline is evaluated on the validation set; EfficientNet-B0 is evaluated 
+on the held-out test set, making the comparison clearly labeled in Table 1.  Any deep model 
+that fails to outperform the baseline on all reported metrics would not justify its added 
+computational complexity and would require redesign.  All metric computations use scikit-learn's 
+\texttt{hamming\_loss} and \texttt{f1\_score} implementations~\cite{pedregosa2011scikit}, which adhere 
+to the standard formulations in Equations~\eqref{eq:ema}--\eqref{eq:microf1}.  Loss computations during 
+training use PyTorch's \texttt{BCEWithLogitsLoss}~\cite{paszke2019pytorch}.  The baseline is evaluated on
 Hamming Loss and Macro F1; Exact Match Accuracy and Micro F1 are computed for EfficientNet-B0
 only, keeping the baseline evaluation focused on the primary comparison metrics.
 
